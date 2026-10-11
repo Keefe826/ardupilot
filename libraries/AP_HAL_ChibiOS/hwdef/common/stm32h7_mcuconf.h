@@ -19,6 +19,10 @@
 #pragma once
 
 // we want to cope with both revision XY chips and newer chips
+#ifndef STM32_ADC_ADC12_DMA_CHAN
+#define STM32_ADC_ADC12_DMA_CHAN STM32_DMAMUX1_ADC1
+#endif
+
 #if !defined(HAL_CUSTOM_MCU_CLOCKRATE) || HAL_CUSTOM_MCU_CLOCKRATE <= 400000000
 #define STM32_ENFORCE_H7_REV_XY
 #endif
@@ -29,6 +33,7 @@
 #ifndef STM32_LSEDRV
 #define STM32_LSEDRV                (3U << 3U)
 #endif
+
 
 /*
  * STM32H7xx drivers configuration.
@@ -157,7 +162,7 @@
 // this gives 400MHz system clock
 #define STM32_HSE_ENABLED                   TRUE
 #define STM32_HSI_ENABLED                   FALSE
-#define STM32_PLL1_DIVM_VALUE               2
+#define STM32_PLL1_DIVM_VALUE               5
 #define STM32_PLL2_DIVM_VALUE               5
 #define STM32_PLL3_DIVM_VALUE               5
 
@@ -269,10 +274,7 @@
 #define STM32_PLL3_DIVR_VALUE               9
 
 #elif STM32_HSECLK == 25000000U
-#ifdef HAL_CUSTOM_MCU_CLOCKRATE
-#error "Unable to configure custom clockrate"
-#endif
-#define STM32_PLL1_DIVN_VALUE               64
+#define STM32_PLL1_DIVN_VALUE               160
 #define STM32_PLL1_DIVP_VALUE               2
 #define STM32_PLL1_DIVQ_VALUE               10
 #define STM32_PLL1_DIVR_VALUE               2

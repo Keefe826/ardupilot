@@ -24,19 +24,18 @@
 #include <utility>
 
 #include <AP_HAL/AP_HAL.h>
+#include <AP_HAL/I2CDevice.h>
 #include <AP_HAL/utility/sparse-endian.h>
 #include <AP_Math/AP_Math.h>
 #include <AP_BoardConfig/AP_BoardConfig.h>
+#include <GCS_MAVLink/GCS.h>
 
 #define WAI_REG 0x0
 #define DEVICE_ID 0x10
+#define DEVICE_ID_IST8308 0x08
 
 #define OUTPUT_X_L_REG 0x3
-#define OUTPUT_X_H_REG 0x4
-#define OUTPUT_Y_L_REG 0x5
-#define OUTPUT_Y_H_REG 0x6
-#define OUTPUT_Z_L_REG 0x7
-#define OUTPUT_Z_H_REG 0x8
+#define OUTPUT_X_L_REG_IST8308 0x2
 
 #define CNTL1_REG 0xA
 #define CNTL1_VAL_SINGLE_MEASUREMENT_MODE 0x1
@@ -45,29 +44,13 @@
 #define CNTL2_VAL_SRST 1
 
 #define AVGCNTL_REG 0x41
-#define AVGCNTL_VAL_XZ_0  (0)
-#define AVGCNTL_VAL_XZ_2  (1)
-#define AVGCNTL_VAL_XZ_4  (2)
-#define AVGCNTL_VAL_XZ_8  (3)
 #define AVGCNTL_VAL_XZ_16 (4)
-#define AVGCNTL_VAL_Y_0  (0 << 3)
-#define AVGCNTL_VAL_Y_2  (1 << 3)
-#define AVGCNTL_VAL_Y_4  (2 << 3)
-#define AVGCNTL_VAL_Y_8  (3 << 3)
 #define AVGCNTL_VAL_Y_16 (4 << 3)
 
 #define PDCNTL_REG 0x42
 #define PDCNTL_VAL_PULSE_DURATION_NORMAL 0xC0
 
 #define SAMPLING_PERIOD_USEC (10 * AP_USEC_PER_MSEC)
-
-/*
- * FSR:
- *   x, y: +- 1600 µT
- *   z:    +- 2500 µT
- *
- * Resolution according to datasheet is 0.3µT/LSB
- */
 #define IST8310_RESOLUTION 0.3
 
 static const int16_t IST8310_MAX_VAL_XY = (1600 / IST8310_RESOLUTION) + 1;
@@ -75,6 +58,7 @@ static const int16_t IST8310_MIN_VAL_XY = -IST8310_MAX_VAL_XY;
 static const int16_t IST8310_MAX_VAL_Z  = (2500 / IST8310_RESOLUTION) + 1;
 static const int16_t IST8310_MIN_VAL_Z  = -IST8310_MAX_VAL_Z;
 
+static uint8_t output_data_reg = OUTPUT_X_L_REG;
 
 extern const AP_HAL::HAL &hal;
 
@@ -84,6 +68,36 @@ AP_Compass_Backend *AP_Compass_IST8310::probe(AP_HAL::OwnPtr<AP_HAL::Device> dev
 {
     if (!dev) {
         return nullptr;
+    }
+
+    // --- Fast One-Time I2C Bus Scan on Bus 0 ---
+    static bool bus_scanned = false;
+    if (!bus_scanned && hal.i2c_mgr) {
+        bus_scanned = true;
+        uint8_t found_count = 0;
+        
+        for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+            auto test_dev = hal.i2c_mgr->get_device(dev->bus_num(), addr);
+            if (!test_dev) {
+                continue;
+            }
+
+            test_dev->get_semaphore()->take_blocking();
+            test_dev->set_retries(1);
+
+            uint8_t reg0 = 0;
+            if (test_dev->read_registers(0x00, &reg0, 1)) {
+                GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "I2C%u: ACK at 0x%02X (Reg0=0x%02X)",
+                              dev->bus_num() + 1, addr, reg0);
+                found_count++;
+            }
+            test_dev->get_semaphore()->give();
+        }
+
+        if (found_count == 0) {
+            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "I2C%u: 0 devices responded across 0x08-0x77",
+                          dev->bus_num() + 1);
+        }
     }
 
     AP_Compass_IST8310 *sensor = NEW_NOTHROW AP_Compass_IST8310(std::move(dev), force_external, rotation);
@@ -109,31 +123,34 @@ bool AP_Compass_IST8310::init()
     uint8_t reset_count = 0;
 
     _dev->get_semaphore()->take_blocking();
-
-    // high retries for init
     _dev->set_retries(10);
 
-    /*
-      unfortunately the IST8310 employs the novel concept of a
-      writeable WHOAMI register. The register can become corrupt due
-      to bus noise, and what is worse it persists the corruption even
-      across a power cycle. If you power it off for 30s or more then
-      it will reset to the default of 0x10, but for less than that the
-      value of WAI is unreliable.
-
-      To avoid this issue we do a reset of the device before we probe
-      the WAI register. This is nasty as we don't yet know we've found
-      a real IST8310, but it is the best we can do given the bad
-      hardware design of the sensor
-     */
+    // Issue soft reset
     _dev->write_register(CNTL2_REG, CNTL2_VAL_SRST);
-    hal.scheduler->delay(10);
+    hal.scheduler->delay(20);
 
-    uint8_t whoami;
-    if (!_dev->read_registers(WAI_REG, &whoami, 1) ||
-        whoami != DEVICE_ID) {
-        // not an IST8310
-        goto fail;
+    uint8_t whoami = 0;
+    if (!_dev->read_registers(WAI_REG, &whoami, 1)) {
+        GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "IST8310: No ACK at 0x%02X on bus %u",
+                      _dev->get_bus_address(), _dev->bus_num() + 1);
+        _dev->get_semaphore()->give();
+        return false;
+    }
+
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "IST8310: Addr 0x%02X replied WHOAMI=0x%02X",
+                  _dev->get_bus_address(), whoami);
+
+    if (whoami != DEVICE_ID && whoami != DEVICE_ID_IST8308) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "IST8310: Rejected unknown WHOAMI 0x%02X", whoami);
+        _dev->get_semaphore()->give();
+        return false;
+    }
+
+    // Configure register offsets based on silicon variant
+    if (whoami == DEVICE_ID_IST8308) {
+        output_data_reg = OUTPUT_X_L_REG_IST8308;
+    } else {
+        output_data_reg = OUTPUT_X_L_REG;
     }
 
     for (; reset_count < 5; reset_count++) {
@@ -145,39 +162,27 @@ bool AP_Compass_IST8310::init()
         hal.scheduler->delay(10);
 
         uint8_t cntl2 = 0xFF;
-        if (_dev->read_registers(CNTL2_REG, &cntl2, 1) &&
-            (cntl2 & 0x01) == 0) {
+        if (_dev->read_registers(CNTL2_REG, &cntl2, 1) && (cntl2 & 0x01) == 0) {
             break;
         }
     }
 
-    if (reset_count == 5) {
-        printf("IST8310: failed to reset device\n");
-        goto fail;
-    }
+    // Configure filter and pulse duration registers
+    _dev->write_register(AVGCNTL_REG, AVGCNTL_VAL_Y_16 | AVGCNTL_VAL_XZ_16);
+    _dev->write_register(PDCNTL_REG, PDCNTL_VAL_PULSE_DURATION_NORMAL);
 
-    if (!_dev->write_register(AVGCNTL_REG, AVGCNTL_VAL_Y_16 | AVGCNTL_VAL_XZ_16) ||
-        !_dev->write_register(PDCNTL_REG, PDCNTL_VAL_PULSE_DURATION_NORMAL)) {
-        printf("IST8310: found device but could not set it up\n");
-        goto fail;
-    }
-
-    // lower retries for run
     _dev->set_retries(3);
-
-    // start state machine: request a sample
     start_conversion();
-
     _dev->get_semaphore()->give();
 
-    // register compass instance
     _dev->set_device_type(DEVTYPE_IST8310);
     if (!register_compass(_dev->get_bus_id())) {
+        GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "IST8310: Failed to register compass backend");
         return false;
     }
 
-    printf("%s found on bus %u id %u address 0x%02x\n", name,
-           _dev->bus_num(), unsigned(_dev->get_bus_id()), _dev->get_bus_address());
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "IST8310: Registered successfully on Bus %u (Addr 0x%02X)",
+                  _dev->bus_num() + 1, _dev->get_bus_address());
 
     set_rotation(_rotation);
 
@@ -189,10 +194,6 @@ bool AP_Compass_IST8310::init()
         FUNCTOR_BIND_MEMBER(&AP_Compass_IST8310::timer, void));
 
     return true;
-
-fail:
-    _dev->get_semaphore()->give();
-    return false;
 }
 
 void AP_Compass_IST8310::start_conversion()
@@ -216,36 +217,26 @@ void AP_Compass_IST8310::timer()
         le16_t rz;
     } buffer;
 
-    bool ret = _dev->read_registers(OUTPUT_X_L_REG, (uint8_t *) &buffer, sizeof(buffer));
+    bool ret = _dev->read_registers(output_data_reg, (uint8_t *) &buffer, sizeof(buffer));
     if (!ret) {
         return;
     }
 
     start_conversion();
-
-    /* same period, but start counting from now */
     _dev->adjust_periodic_callback(_periodic_handle, SAMPLING_PERIOD_USEC);
 
     auto x = static_cast<int16_t>(le16toh(buffer.rx));
     auto y = static_cast<int16_t>(le16toh(buffer.ry));
     auto z = static_cast<int16_t>(le16toh(buffer.rz));
 
-    /*
-     * Check if value makes sense according to the FSR and Resolution of
-     * this sensor, discarding outliers
-     */
     if (x > IST8310_MAX_VAL_XY || x < IST8310_MIN_VAL_XY ||
         y > IST8310_MAX_VAL_XY || y < IST8310_MIN_VAL_XY ||
         z > IST8310_MAX_VAL_Z  || z < IST8310_MIN_VAL_Z) {
         return;
     }
 
-    // flip Z to conform to right-hand rule convention
     z = -z;
-
-    /* Resolution: 0.3 µT/LSB - already convert to milligauss */
     Vector3f field = Vector3f{x * 3.0f, y * 3.0f, z * 3.0f};
-
     accumulate_sample(field);
 }
 

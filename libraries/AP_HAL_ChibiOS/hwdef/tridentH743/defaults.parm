@@ -1,0 +1,19 @@
+cat << 'EOF' > libraries/AP_HAL_ChibiOS/hwdef/tridentH743/defaults.parm
+# Telemetry on USART2
+SERIAL1_PROTOCOL 2
+SERIAL1_BAUD 115
+
+# GPS on USART3 (MAX-M10S factory default 38400)
+SERIAL2_PROTOCOL 5
+SERIAL2_BAUD 38
+GPS_TYPE 1
+
+# Carrier link and unused ports disabled
+SERIAL3_PROTOCOL -1
+SERIAL4_PROTOCOL -1
+SERIAL5_PROTOCOL -1
+SERIAL6_PROTOCOL -1
+
+# In-memory monitoring defaults
+BATT_MONITOR 0
+EOF

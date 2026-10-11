@@ -426,11 +426,15 @@ int strcmp(const char *s1, const char *s2)
 }
 
 //simple variant of std c function to reduce used flash space
-size_t strlen(const char *s1)
+__attribute__((optimize("no-tree-loop-distribute-patterns")))
+size_t strlen(const char *s)
 {
-    size_t ret = 0;
-    while (*s1++) ret++;
-    return ret;
+    const char *p = s;
+    while (*p) {
+        asm volatile("" ::: "memory");
+        p++;
+    }
+    return p - s;
 }
 
 //simple variant of std c function to reduce used flash space
@@ -438,6 +442,7 @@ void *memset(void *s, int c, size_t n)
 {
     uint8_t *b = (uint8_t *)s;
     while (n--) {
+        asm volatile("" ::: "memory");
         *b++ = c;
     }
     return s;
