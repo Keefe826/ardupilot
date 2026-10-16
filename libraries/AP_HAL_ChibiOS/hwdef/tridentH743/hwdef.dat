@@ -13,8 +13,11 @@ define STM32_PLL1_VCI_RANGE 2
 
 define STM32_ST_USE_TIMER 5
 
-# --- In-Memory Parameter Storage (Zero Flash Sector Access) ---
+# --- Storage (RAM Mode) ---
 define HAL_STORAGE_SIZE 16384
+
+# --- MicroSD Filesystem ---
+define HAL_OS_FATFS_IO 1
 
 # --- USB Configuration ---
 USB_VENDOR 0x1209
