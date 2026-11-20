@@ -315,3 +315,8 @@ protected:
 
 // access to usb init for stdio.cpp
 void usb_initialise(void);
+#if HAL_USE_SERIAL_USB == TRUE
+void usb_reconnect(void);
+#else
+static inline void usb_reconnect(void) {}
+#endif

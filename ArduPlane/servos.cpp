@@ -1037,6 +1037,17 @@ void Plane::servos_output(void)
     channel_function_mixer(SRV_Channel::k_rudder,  SRV_Channel::k_elevator, SRV_Channel::k_vtail_right, SRV_Channel::k_vtail_left);
 
 #if HAL_QUADPLANE_ENABLED
+    if (quadplane.available() &&
+        (quadplane.get_frame_class() == AP_Motors::MOTOR_FRAME_TRIDENT) &&
+        quadplane.in_vtol_mode() &&
+        !quadplane.assisted_flight) {
+        // Hold fixed-wing elevons neutral during pure VTOL hover to prevent propwash buffeting
+        SRV_Channels::set_output_scaled(SRV_Channel::k_elevon_left, 0);
+        SRV_Channels::set_output_scaled(SRV_Channel::k_elevon_right, 0);
+        rollController.reset_I();
+        pitchController.reset_I();
+    }
+
     // cope with tailsitters and bicopters
     quadplane.tailsitter.output();
     quadplane.tiltrotor.bicopter_output();

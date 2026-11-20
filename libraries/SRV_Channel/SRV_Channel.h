@@ -225,6 +225,8 @@ public:
         k_actuator4             = 187,
         k_actuator5             = 188,
         k_actuator6             = 189,
+        k_trident_vane_front    = 190,   ///< Trident VTOL front center-duct vane bank
+        k_trident_vane_rear     = 191,   ///< Trident VTOL rear center-duct vane bank
         k_nr_aux_servo_functions         ///< This must be the last enum value (only add new values _before_ this one)
     } Function;
 

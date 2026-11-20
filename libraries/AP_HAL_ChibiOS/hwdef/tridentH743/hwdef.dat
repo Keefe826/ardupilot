@@ -11,9 +11,14 @@ define STM32_PLL1_DIVN_VALUE 160
 define STM32_PLL1_DIVP_VALUE 2
 define STM32_PLL1_VCI_RANGE 2
 
-define STM32_ST_USE_TIMER 5
+# TCAN3414 supports up to 8 Mbps CAN FD
+CANFD_SUPPORTED 8
 
-# --- Storage (RAM Mode) ---
+# Use TIM12 (16-bit) for system timer so TIM5 (PA2/PA3) and TIM2 (PA5) remain free
+define STM32_ST_USE_TIMER 12
+define CH_CFG_ST_RESOLUTION 16
+
+# --- Storage (MicroSD /APM/*.stg via FATFS; no FRAM/internal flash page reserved) ---
 define HAL_STORAGE_SIZE 16384
 
 # --- MicroSD Filesystem ---
@@ -26,24 +31,49 @@ USB_STRING_MANUFACTURER "Trident"
 USB_STRING_PRODUCT "Trident H743"
 
 # --- Serial Ports ---
-SERIAL_ORDER OTG1 USART2 USART3 UART8
+# SERIAL0=OTG1 (USB-C), SERIAL1=USART2 (Carrier H7 Telem2), SERIAL2=USART3 (Carrier H5 GPS2),
+# SERIAL3=UART8 (Carrier F411 link), SERIAL4=UART7 (Carrier H3 Telem1),
+# SERIAL5=USART6 (Carrier H4 GPS1), SERIAL6=UART4 (Carrier H2 RC Input)
+SERIAL_ORDER OTG1 USART2 USART3 UART8 UART7 USART6 UART4
 
 PA11 OTG_FS_DM OTG1
 PA12 OTG_FS_DP OTG1
 PA13 JTMS-SWDIO SWD
 PA14 JTCK-SWCLK SWD
 
-# GPS UART (USART3)
+# GPS 2 UART (USART3 -> Main CN1 34/36 -> Carrier CN1 84/86 UART4 -> H5)
 PD8 USART3_TX USART3
 PD9 USART3_RX USART3
 
-# Carrier Board Link (UART8)
+# Carrier Board STM32F411CEU6 Link (UART8 -> Main CN1 55/58 -> Carrier CN1 5/8)
 PE1 UART8_TX UART8
 PE0 UART8_RX UART8
 
-# Telemetry Port (USART2)
+# Telemetry 2 Port (USART2 -> Main CN1 32/30 -> Carrier CN1 82/80 UART5 -> H7)
+# Note: PD3 (USART2_CTS) and PD4 (USART2_RTS) are not routed to CN1 and are left unmapped.
 PD5 USART2_TX USART2
 PD6 USART2_RX USART2
+
+# Telemetry 1 Port (UART7 -> Main CN1 90/84/78/87 -> Carrier CN1 40/34/28/37 USART2 -> H3)
+PE8 UART7_TX UART7
+PE7 UART7_RX UART7
+PE10 UART7_CTS UART7
+PE9 UART7_RTS UART7
+
+# GPS 1 UART (USART6 -> Main CN1 24/26 -> Carrier CN1 74/76 USART3 -> H4)
+PG14 USART6_TX USART6
+PG9 USART6_RX USART6
+
+# RC Input UART (UART4 -> Main CN1 96/93 -> Carrier CN1 46/43 USART1 -> H2)
+PA0 UART4_TX UART4
+PA1 UART4_RX UART4
+
+define DEFAULT_SERIAL1_PROTOCOL SerialProtocol_MAVLink2
+define DEFAULT_SERIAL2_PROTOCOL SerialProtocol_GPS
+define DEFAULT_SERIAL3_PROTOCOL SerialProtocol_None
+define DEFAULT_SERIAL4_PROTOCOL SerialProtocol_MAVLink2
+define DEFAULT_SERIAL5_PROTOCOL SerialProtocol_GPS
+define DEFAULT_SERIAL6_PROTOCOL SerialProtocol_RCIN
 
 # --- SPI Buses & Triple LSM6DSV IMUs ---
 PB3 SPI1_SCK SPI1
@@ -65,9 +95,9 @@ SPIDEV imu1 SPI2 DEVID1 IMU1_CS MODE0 10*MHZ 10*MHZ
 SPIDEV imu2 SPI1 DEVID1 IMU2_CS MODE0 10*MHZ 10*MHZ
 SPIDEV imu3 SPI4 DEVID1 IMU3_CS MODE0 10*MHZ 10*MHZ
 
-define HAL_INS_PROBE1 ADD_BACKEND(AP_InertialSensor_LSM6DSV::probe(*this, hal.spi->get_device("imu1")))
-define HAL_INS_PROBE2 ADD_BACKEND(AP_InertialSensor_LSM6DSV::probe(*this, hal.spi->get_device("imu2")))
-define HAL_INS_PROBE3 ADD_BACKEND(AP_InertialSensor_LSM6DSV::probe(*this, hal.spi->get_device("imu3")))
+define HAL_INS_PROBE1 ADD_BACKEND(AP_InertialSensor_LSM6DSV::probe(*this, hal.spi->get_device("imu1"), ROTATION_PITCH_180))
+define HAL_INS_PROBE2 ADD_BACKEND(AP_InertialSensor_LSM6DSV::probe(*this, hal.spi->get_device("imu2"), ROTATION_PITCH_180))
+define HAL_INS_PROBE3 ADD_BACKEND(AP_InertialSensor_LSM6DSV::probe(*this, hal.spi->get_device("imu3"), ROTATION_PITCH_180))
 define HAL_INS_PROBE_LIST HAL_INS_PROBE1; HAL_INS_PROBE2; HAL_INS_PROBE3
 
 # --- I2C Buses & Sensor Pinout ---
@@ -112,28 +142,58 @@ PC10 SDMMC1_D2 SDMMC1
 PC11 SDMMC1_D3 SDMMC1
 PC12 SDMMC1_CK SDMMC1
 PD2 SDMMC1_CMD SDMMC1
+PG4 SDCARD_DETECT INPUT
 
-# --- Status Red LED ---
+# --- Status Red LED (ACT) ---
 PG1 LED_RED OUTPUT HIGH GPIO(0)
 define HAL_LED_ON 1
 
-# --- PWM Control Outputs ---
-PE11 TIM1_CH2 TIM1 PWM(1) GPIO(50)
-PE13 TIM1_CH3 TIM1 PWM(2) GPIO(51)
-PE14 TIM1_CH4 TIM1 PWM(3) GPIO(52)
+# --- Power Alert & IMU Interrupt Inputs ---
+PA8 PWR_ALERT INPUT
+PG10 IMU1_INT1 INPUT
+PG11 IMU2_INT1 INPUT
+PG12 IMU3_INT1 INPUT
 
-PD12 TIM4_CH1 TIM4 PWM(4) GPIO(53)
-PD13 TIM4_CH2 TIM4 PWM(5) GPIO(54)
-PD14 TIM4_CH3 TIM4 PWM(6) GPIO(55)
-PD15 TIM4_CH4 TIM4 PWM(7) GPIO(56)
+# --- QSPI NOR Flash (U2 W25Q256JVEIQ, 32MB on PB10/PF6..PF10) ---
+# Pins: PB10=QUADSPI_BK1_NCS (2.2k pull-up R22), PF10=CLK, PF8=IO0, PF9=IO1, PF7=IO2, PF6=IO3.
+# Kept unconfigured in internal-flash firmware: declaring QUADSPI1 enables HAL_XIP_ENABLED
+# and ArduPilot DataFlash/LittleFS require standard SPI (SPIDEV), not WSPI/QSPI.
 
-PC6 TIM8_CH1 TIM8 PWM(8) GPIO(57)
-PC7 TIM8_CH2 TIM8 PWM(9) GPIO(58)
+# --- PWM Control Outputs & Onboard WS2812 RGB LED ---
+# Existing channels 1-9 preserved for HPWM1..3, ELEVONL1..2, ELEVONR1..2, ESC1..2
+PE11 TIM1_CH2 TIM1 PWM(1) GPIO(50)   # HPWM1   (Main CN1 5  -> Carrier CN1 55 -> H1p4, CN3p1)
+PE13 TIM1_CH3 TIM1 PWM(2) GPIO(51)   # HPWM2   (Main CN1 7  -> Carrier CN1 57 -> H1p5, CN3p5)
+PE14 TIM1_CH4 TIM1 PWM(3) GPIO(52)   # HPWM3   (Main CN1 10 -> Carrier CN1 60 -> H1p6, CN3p9)
 
-# --- CAN Bus ---
+PD12 TIM4_CH1 TIM4 PWM(4) GPIO(53) NODMA   # ELEVONL1 (Main CN1 11 -> Carrier CN1 61 -> CN3p11, Standard PWM)
+PD13 TIM4_CH2 TIM4 PWM(5) GPIO(54) NODMA   # ELEVONL2 (Main CN1 6  -> Carrier CN1 56 -> CN3p3, Standard PWM)
+PD14 TIM4_CH3 TIM4 PWM(6) GPIO(55) NODMA   # ELEVONR1 (Main CN1 12 -> Carrier CN1 62 -> CN3p13, Standard PWM)
+PD15 TIM4_CH4 TIM4 PWM(7) GPIO(56) NODMA   # ELEVONR2 (Main CN1 8  -> Carrier CN1 58 -> CN3p7, Standard PWM)
+
+PC6 TIM8_CH1 TIM8 PWM(8) GPIO(57) BIDIR    # ESC1    (Main CN1 46 -> Carrier CN1 96 -> H1p8, BDShot/DShot)
+PC7 TIM8_CH2 TIM8 PWM(9) GPIO(58) BIDIR    # ESC2    (Main CN1 49 -> Carrier CN1 99 -> H1p7, BDShot/DShot)
+
+PB0 TIM3_CH3 TIM3 PWM(10) GPIO(59) NODMA   # VANE1   (Main CN1 15 -> Carrier CN1 65 -> CN3p17, Standard PWM)
+PB1 TIM3_CH4 TIM3 PWM(11) GPIO(60) NODMA   # VANE2   (Main CN1 14 -> Carrier CN1 64 -> CN3p15, Standard PWM)
+
+PA2 TIM5_CH3 TIM5 PWM(12) GPIO(61) NODMA   # AUX PWM (Main CN1 16 -> Carrier CN1 66 TIM5_CH4_ESD -> H1p3, Standard PWM)
+PA3 TIM5_CH4 TIM5 PWM(13) GPIO(62) NODMA   # TILT1   (Main CN1 17 -> Carrier CN1 67 -> CN3p19, Standard PWM)
+
+# Onboard WS2812B-2020-V6 Status RGB LED (SYS, via R68 22R)
+PA5 TIM2_CH1 TIM2 PWM(14) GPIO(63)
+define DEFAULT_NTF_LED_TYPES 455
+# Note: PB11 (TIM2_CH4 on U1) is unconnected in hardware.
+
+# --- CAN Bus (TCAN3414DRBR -> Main CN1 41/43 -> Carrier CN1 91/93 -> H8 CAN 1) ---
 PB8 CAN1_RX CAN1
 PB9 CAN1_TX CAN1
 
 # --- DMA & System Configuration ---
-DMA_PRIORITY SDMMC* ADC* SPI* USART* UART*
+DMA_PRIORITY SDMMC* ADC* SPI* TIM2* TIM8* USART* UART*
+DMA_NOSHARE SPI1* SPI2* SPI4* TIM2_UP TIM8_UP
 define HAL_WITH_IO_MCU 0
+
+# Internal MCU flash parameter storage (last two 128KB sectors at 0x081C0000) so microSD is logging-only
+undef HAL_STORAGE_SIZE
+define HAL_STORAGE_SIZE 32768
+STORAGE_FLASH_PAGE 14

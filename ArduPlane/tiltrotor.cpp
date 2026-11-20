@@ -826,7 +826,7 @@ bool Tiltrotor::tilt_over_max_angle(void) const
 // throttle of forward flight motors including any tilting motors
 bool Tiltrotor::get_forward_throttle(float &throttle) const
 {
-    if (!enabled() || !_is_vectored) {
+    if (!enabled() || (!_is_vectored && quadplane.get_frame_class() != AP_Motors::MOTOR_FRAME_TRIDENT)) {
         return false;
     }
     const float throttle_range = motors->thr_lin.get_spin_max() - motors->thr_lin.get_spin_min();

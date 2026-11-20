@@ -20,6 +20,9 @@
 #include "Storage.h"
 #include "HAL_ChibiOS_Class.h"
 #include "Scheduler.h"
+#if AP_HAL_UARTDRIVER_ENABLED
+#include "UARTDriver.h"
+#endif
 #include "hwdef/common/flash.h"
 #include <AP_Filesystem/AP_Filesystem.h>
 #include <stdio.h>
@@ -322,6 +325,41 @@ void Storage::_timer_tick(void)
     }
 }
 
+#ifdef STORAGE_FLASH_PAGE
+#if HAL_USE_SERIAL_USB == TRUE && AP_HAL_UARTDRIVER_ENABLED
+static bool early_flash_erased;
+static void record_early_flash_erase(void)
+{
+    if (AP_HAL::millis() < 4000) {
+        early_flash_erased = true;
+    }
+}
+static void reconnect_usb_after_flash_erase(void)
+{
+    if (early_flash_erased) {
+        early_flash_erased = false;
+        usb_reconnect();
+    }
+}
+#else
+static inline void record_early_flash_erase(void) {}
+static inline void reconnect_usb_after_flash_erase(void) {}
+#endif
+
+static bool erase_page_if_needed(uint8_t page)
+{
+    // Skip already-erased pages so fresh flashes do not lock IRQs and stall USB.
+    if (hal.flash->ispageerased(page)) {
+        return true;
+    }
+    if (hal.flash->erasepage(page)) {
+        record_early_flash_erase();
+        return true;
+    }
+    return false;
+}
+#endif
+
 /*
   load all data from flash
  */
@@ -339,6 +377,7 @@ void Storage::_flash_load(void)
     if (!_flash.init()) {
         AP_HAL::panic("Unable to init flash storage");
     }
+    reconnect_usb_after_flash_erase();
 #else
     AP_HAL::panic("Unable to init storage");
 #endif
@@ -418,17 +457,15 @@ bool Storage::_flash_erase_sector(uint8_t sector)
 #if AP_FLASH_STORAGE_DOUBLE_PAGE
     sector *= 2;
 #endif
-    // erasing a page can take long enough that USB may not initialise properly if it happens
-    // while the host is connecting. Only do a flash erase if we have been up for more than 4s
     for (uint8_t i=0; i<STORAGE_FLASH_RETRIES; i++) {
         // a sector erase stops the whole MCU so set up a long expected delay
         EXPECT_DELAY_MS(1000);
 #if AP_FLASH_STORAGE_DOUBLE_PAGE
-        if (hal.flash->erasepage(_flash_page+sector) && hal.flash->erasepage(_flash_page+sector+1)) {
+        if (erase_page_if_needed(_flash_page+sector) && erase_page_if_needed(_flash_page+sector+1)) {
             return true;
         }
 #else
-        if (hal.flash->erasepage(_flash_page+sector)) {
+        if (erase_page_if_needed(_flash_page+sector)) {
             return true;
         }
 #endif

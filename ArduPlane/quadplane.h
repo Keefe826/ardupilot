@@ -196,6 +196,8 @@ public:
     // Get pilot throttle input with deadzone, this will return 50% throttle in failsafe!
     float get_throttle_input() const;
 
+    AP_Motors::motor_frame_class get_frame_class(void) const { return (AP_Motors::motor_frame_class)frame_class.get(); }
+
     void Log_Write_AttRate();
 
 private:

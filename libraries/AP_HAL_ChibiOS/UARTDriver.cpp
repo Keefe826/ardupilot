@@ -1903,4 +1903,23 @@ void UARTDriver::usb_debug_lock(bool lock)
 }
 #endif // AP_USB_DEBUG_ENABLED
 
+#if HAL_USE_SERIAL_USB == TRUE
+/*
+  pulse USB bus disconnect/connect when early-boot flash erase stalls
+  interrupts before the host finishes enumeration
+ */
+void usb_reconnect(void)
+{
+    if (serusbcfg1.usbp == nullptr ||
+        serusbcfg1.usbp->state == USB_UNINIT ||
+        serusbcfg1.usbp->state == USB_STOP ||
+        serusbcfg1.usbp->state == USB_ACTIVE) {
+        return;
+    }
+    usbDisconnectBus(serusbcfg1.usbp);
+    chThdSleepMilliseconds(50);
+    usbConnectBus(serusbcfg1.usbp);
+}
+#endif
+
 #endif // CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS && AP_HAL_UARTDRIVER_ENABLED

@@ -147,7 +147,7 @@ const AP_Param::GroupInfo QuadPlane::var_info[] = {
     // @Param: FRAME_CLASS
     // @DisplayName: Frame Class
     // @Description: Controls major frame class for multicopter component
-    // @Values: 0:Undefined, 1:Quad, 2:Hexa, 3:Octa, 4:OctaQuad, 5:Y6, 7:Tri, 10: Single/Dual, 12:DodecaHexa, 14:Deca, 15:Scripting Matrix, 17:Dynamic Scripting Matrix
+    // @Values: 0:Undefined, 1:Quad, 2:Hexa, 3:Octa, 4:OctaQuad, 5:Y6, 7:Tri, 10: Single/Dual, 12:DodecaHexa, 14:Deca, 15:Scripting Matrix, 17:Dynamic Scripting Matrix, 18:TridentTandem
     // @User: Standard
     AP_GROUPINFO("FRAME_CLASS", 46, QuadPlane, frame_class, 1),
 
@@ -682,6 +682,21 @@ bool QuadPlane::setup(void)
     case AP_Motors::MOTOR_FRAME_SCRIPTING_MATRIX:
     case AP_Motors::MOTOR_FRAME_DYNAMIC_SCRIPTING_MATRIX:
         break;
+    case AP_Motors::MOTOR_FRAME_TRIDENT:
+        SRV_Channels::set_default_function(CH_1, SRV_Channel::k_none);
+        SRV_Channels::set_default_function(CH_2, SRV_Channel::k_none);
+        SRV_Channels::set_default_function(CH_3, SRV_Channel::k_none);
+        SRV_Channels::set_default_function(CH_4, SRV_Channel::k_elevon_left);
+        SRV_Channels::set_default_function(CH_5, SRV_Channel::k_elevon_left);
+        SRV_Channels::set_default_function(CH_6, SRV_Channel::k_elevon_right);
+        SRV_Channels::set_default_function(CH_7, SRV_Channel::k_elevon_right);
+        SRV_Channels::set_default_function(CH_8, SRV_Channel::k_motor1);
+        SRV_Channels::set_default_function(CH_9, SRV_Channel::k_motor2);
+        SRV_Channels::set_default_function(CH_10, SRV_Channel::k_trident_vane_front);
+        SRV_Channels::set_default_function(CH_11, SRV_Channel::k_trident_vane_rear);
+        SRV_Channels::set_default_function(CH_12, SRV_Channel::k_none);
+        SRV_Channels::set_default_function(CH_13, SRV_Channel::k_motor_tilt);
+        break;
     default:
         AP_BoardConfig::config_error("Unsupported Q_FRAME_CLASS %u", (unsigned int)(frame_class.get()));
     }
@@ -710,6 +725,10 @@ bool QuadPlane::setup(void)
             motors_var_info = AP_MotorsMatrix_Scripting_Dynamic::var_info;
 #endif // AP_SCRIPTING_ENABLED
             break;
+    case AP_Motors::MOTOR_FRAME_TRIDENT:
+        motors = NEW_NOTHROW AP_MotorsTrident(rc_speed);
+        motors_var_info = AP_MotorsTrident::var_info;
+        break;
     default:
         motors = NEW_NOTHROW AP_MotorsMatrix(rc_speed);
         motors_var_info = AP_MotorsMatrix::var_info;
@@ -1740,6 +1759,19 @@ void QuadPlane::update(void)
     }
 
     tiltrotor.update();
+
+    if ((AP_Motors::motor_frame_class)frame_class.get() == AP_Motors::MOTOR_FRAME_TRIDENT &&
+        tiltrotor.enabled() &&
+        plane.arming.is_armed_and_safety_off() &&
+        (in_vtol_mode() || assisted_flight)) {
+        const float tilt_offset = static_cast<AP_MotorsTrident *>(motors)->get_tilt_pitch_offset();
+        if (!is_zero(tilt_offset)) {
+            const float cur_scaled = SRV_Channels::get_output_scaled(SRV_Channel::k_motor_tilt);
+            const float max_tilt_scaled = 1000.0f * (constrain_float((float)tiltrotor.max_angle_deg.get(), 0.0f, 90.0f) / 90.0f);
+            SRV_Channels::set_output_scaled(SRV_Channel::k_motor_tilt,
+                                            constrain_float(cur_scaled + tilt_offset, 0.0f, max_tilt_scaled));
+        }
+    }
 
     if (in_vtol_mode()) {
         // if enabled output forward throttle else 0
